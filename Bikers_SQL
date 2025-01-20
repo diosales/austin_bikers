@@ -1,0 +1,64 @@
+WITH bike_stations AS (
+  SELECT station_id, name, status, location, address, property_type, number_of_docks,
+  power_type
+FROM bigquery-public-data.austin_bikeshare.bikeshare_stations),
+
+start_station_info AS (SELECT trip_id, subscriber_type, bike_type, start_time, start_station_id, 
+    bs.location as start_station_location,
+    bs.status as start_station_status,
+    bs.property_type as start_station_prop_type,
+    bs.number_of_docks as start_station_docks_number,
+    bs.power_type as start_station_power_type,
+    start_station_name, end_station_id, end_station_name, duration_minutes
+FROM bigquery-public-data.austin_bikeshare.bikeshare_trips
+LEFT JOIN bike_stations as bs
+ON start_station_id = bs.station_id),
+
+final_joins as (SELECT start_station_info.*,
+    bs.location as end_station_location,
+    bs.status as end_station_status,
+    bs.property_type as end_station_prop_type,
+    bs.number_of_docks as end_station_docks_number,
+    bs.power_type as end_station_power_type
+FROM start_station_info
+LEFT JOIN bike_stations as bs
+ON end_station_id = CAST(bs.station_id AS STRING)),
+
+final_table as (
+  SELECT final_joins.*,
+  LAG(start_time) OVER(PARTITION BY start_station_name ORDER BY start_time) as previous_station_trip_time
+  FROM final_joins
+  WHERE start_station_name != 'Ready for deployment' AND end_station_name != 'Ready for deployment'
+  AND EXTRACT(YEAR FROM start_time) >= 2023
+)
+
+SELECT trip_id, 
+    subscriber_type, 
+    bike_type, 
+    start_time,
+    DATE_ADD(start_time, INTERVAL duration_minutes MINUTE) as end_time,  
+    start_station_id, 
+    start_station_location,
+    start_station_status,
+    start_station_prop_type,
+    start_station_docks_number,
+    start_station_power_type,
+    start_station_name,
+    end_station_id,
+    end_station_name,
+    end_station_location,
+    end_station_status,
+    end_station_prop_type,
+    end_station_docks_number,
+    end_station_power_type,
+    duration_minutes,
+    SUM(duration_minutes) OVER(PARTITION BY subscriber_type, EXTRACT(YEAR FROM start_time), EXTRACT(MONTH FROM start_time))   
+     as total_minutes_per_subtype,
+    SUM(duration_minutes) OVER(PARTITION BY bike_type, EXTRACT(YEAR FROM start_time), EXTRACT(MONTH FROM start_time)) 
+     as total_minutes_per_biketype,
+    COUNT(*) OVER(PARTITION BY start_station_name,EXTRACT(YEAR FROM start_time), EXTRACT(MONTH FROM start_time))
+     as total_trips_started_per_month_and_station,
+    COUNT(*) OVER(PARTITION BY end_station_name,EXTRACT(YEAR FROM start_time), EXTRACT(MONTH FROM start_time))
+     as total_trips_ended_per_month_and_station,
+    DATE_DIFF(start_time, previous_station_trip_time, SECOND) as time_since_last_trip_seconds
+FROM final_table;
